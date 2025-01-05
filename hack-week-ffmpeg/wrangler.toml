@@ -1,0 +1,6 @@
+[[containers.app]]
+instances = 1
+name = "hack-week-ffmpeg"
+
+[containers.app.configuration]
+image = "docker.io/cloudflare/hello-world:1.0"

@@ -1,0 +1,13 @@
+{
+  "name": "hack-week-ffmpeg",
+  "version": "1.0.0",
+  "description": "FFMPEG Docker service",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "fastify": "^5.2.0"
+  },
+  "type": "module"
+}

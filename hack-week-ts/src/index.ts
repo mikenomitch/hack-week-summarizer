@@ -78,7 +78,7 @@ export class AnalyzeImage extends WorkflowEntrypoint<Env, Params> {
 		let imageCaption = step.do('analyze image with AI', async () => {
 			// let object = await this.env.HACK_WEEK_BUCKET.get(event.payload.key);
 
-			let listOfFiles = await this.env.HACK_WEEK_BUCKET.list({ prefix: 'video_frames' });
+			let listOfFiles = await this.env.HACK_WEEK_BUCKET.list({ prefix: 'vid_frames' });
 
 			// await list of promises
 			let captionPromises = listOfFiles.objects.map(async (object) => {
@@ -104,17 +104,18 @@ export class AnalyzeImage extends WorkflowEntrypoint<Env, Params> {
 			});
 
 			let captions = await Promise.all(captionPromises);
+
 			console.log('ALL MY CAPTIONS: ', captions);
 
 			const messages = [
 				{
 					role: 'system',
 					content: `
-						Your job is to take a set of images and generate captions for them.
+						Your job is to take a set of captions from a video and try to summarize the video.
 						Each caption does not have context from prior frames, so you may have to infer context from initial captions.
 						Be brief and direct. Start by saying "A video of" and then explaining.
 						Don't hedge by saying things like "it seems" or "I think".
-						Don't refer to "the captions", just summarize.
+						Don't refer to the captions, just summarize.
 						`,
 				},
 				{

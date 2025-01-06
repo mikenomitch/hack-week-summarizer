@@ -76,23 +76,57 @@ type Params = {
 export class AnalyzeImage extends WorkflowEntrypoint<Env, Params> {
 	async run(event: WorkflowEvent<Params>, step: WorkflowStep) {
 		let imageCaption = step.do('analyze image with AI', async () => {
-			let object = await this.env.HACK_WEEK_BUCKET.get(event.payload.key);
-			if (object == undefined) {
-				throw new Error('Failed to fetch image');
-			}
+			// let object = await this.env.HACK_WEEK_BUCKET.get(event.payload.key);
 
-			let asArrayBuf = await object?.arrayBuffer();
-			if (asArrayBuf == undefined) {
-				throw new Error('Failed to parse image - bad upload');
-			}
+			let listOfFiles = await this.env.HACK_WEEK_BUCKET.list({ prefix: 'video_frames' });
 
-			const input = {
-				image: [...new Uint8Array(asArrayBuf)],
-				prompt: 'Generate a caption for this image',
-				max_tokens: 512,
-			};
+			// await list of promises
+			let captionPromises = listOfFiles.objects.map(async (object) => {
+				console.log('KEY: ', object.key);
 
-			const response = await this.env.AI.run('@cf/llava-hf/llava-1.5-7b-hf', input);
+				let objectBody = await this.env.HACK_WEEK_BUCKET.get(object.key);
+				if (objectBody == undefined) {
+					throw new Error('Failed to fetch image');
+				}
+
+				let asArrayBuf = await objectBody.arrayBuffer();
+				if (asArrayBuf == undefined) {
+					throw new Error('Failed to parse image - bad upload');
+				}
+
+				let input = {
+					image: [...new Uint8Array(asArrayBuf)],
+					prompt: 'This image is a still from a video. Generate a caption for it.',
+					max_tokens: 512,
+				};
+				let response = await this.env.AI.run('@cf/llava-hf/llava-1.5-7b-hf', input);
+				return response.description;
+			});
+
+			let captions = await Promise.all(captionPromises);
+			console.log('ALL MY CAPTIONS: ', captions);
+
+			const messages = [
+				{
+					role: 'system',
+					content: `
+						Your job is to take a set of images and generate captions for them.
+						Each caption does not have context from prior frames, so you may have to infer context from initial captions.
+						Be brief and direct. Start by saying "A video of" and then explaining.
+						Don't hedge by saying things like "it seems" or "I think".
+						Don't refer to "the captions", just summarize.
+						`,
+				},
+				{
+					role: 'user',
+					content: `Here are my image captions: ${captions.join(' --- ')}`,
+				},
+			];
+
+			const response = await this.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { messages });
+
+			console.log('THE SUMMARY RESPONSE IS: ', JSON.stringify(response));
+
 			return JSON.stringify(response);
 		});
 

@@ -20,7 +20,7 @@ export default {
         <body>
             <h1>Summarize a video:</h1>
             <form action="/" enctype="multipart/form-data" method="post">
-                <input name="file" type="file" accept="image/*">
+                <input name="file" type="file" accept="video/*">
                 <input type="submit">
             </form>
         </body>
@@ -89,12 +89,24 @@ export default {
 				// Set the content type based on the file
 				const responseHeaders = new Headers();
 				responseHeaders.set('Content-Type', file.type);
-				const key = uuidv4() + file.name;
+				let uuid = uuidv4();
+				let key = uuid + file.name;
 				await env.HACK_WEEK_BUCKET.put(key, file);
+				let bucketUrl = `https://pub-dbcf9f0bd3af47ca9d40971179ee62de.r2.dev/${key}`;
+				let postURL = `https://poller.io/?url=${bucketUrl}&bucketPath=${uuid}`;
+
+				const ffmpegResponse = await fetch(postURL, { method: 'POST' });
+				if (!ffmpegResponse.ok) {
+					console.log('FFMPEG RESPONSE NOT GOOD');
+					throw new Error(`Failed to process video: ${ffmpegResponse.statusText}`);
+				} else {
+					console.log('FFMPEG RESPONSE ALL GOOD');
+				}
 
 				return Response.json({
 					key,
-					link: `https://dash.cloudflare.com/8505f017ecf4c9b8855b331975d576fe/workers/workflows/analyze-image/instance/${instance.id}`,
+					bucketUrl,
+					postURL,
 				});
 			}
 		}
@@ -114,27 +126,29 @@ export class AnalyzeImage extends WorkflowEntrypoint<Env, Params> {
 			let listOfFiles = await this.env.HACK_WEEK_BUCKET.list({ prefix: event.payload.key });
 
 			// await list of promises
-			let captionPromises = listOfFiles.objects.map(async (object) => {
-				console.log('KEY: ', object.key);
+			let captionPromises = listOfFiles.objects
+				.filter((object) => object.key !== event.payload.key && object.key.includes('/'))
+				.map(async (object) => {
+					console.log('KEY: ', object.key);
 
-				let objectBody = await this.env.HACK_WEEK_BUCKET.get(object.key);
-				if (objectBody == undefined) {
-					throw new Error('Failed to fetch image');
-				}
+					let objectBody = await this.env.HACK_WEEK_BUCKET.get(object.key);
+					if (objectBody == undefined) {
+						throw new Error('Failed to fetch image');
+					}
 
-				let asArrayBuf = await objectBody.arrayBuffer();
-				if (asArrayBuf == undefined) {
-					throw new Error('Failed to parse image - bad upload');
-				}
+					let asArrayBuf = await objectBody.arrayBuffer();
+					if (asArrayBuf == undefined) {
+						throw new Error('Failed to parse image - bad upload');
+					}
 
-				let input = {
-					image: [...new Uint8Array(asArrayBuf)],
-					prompt: 'This image is a still from a video. Generate a caption for it.',
-					max_tokens: 512,
-				};
-				let response = await this.env.AI.run('@cf/llava-hf/llava-1.5-7b-hf', input);
-				return response.description;
-			});
+					let input = {
+						image: [...new Uint8Array(asArrayBuf)],
+						prompt: 'This image is a still from a video. Generate a caption for it.',
+						max_tokens: 512,
+					};
+					let response = await this.env.AI.run('@cf/llava-hf/llava-1.5-7b-hf', input);
+					return response.description;
+				});
 
 			let captions = await Promise.all(captionPromises);
 

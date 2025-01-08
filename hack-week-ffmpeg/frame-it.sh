@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 
 if [ $# -lt 1 ]; then
   echo "Usage: $0 <input_file> [output_directory]"
@@ -22,6 +22,6 @@ INTERVAL=$(echo "$DURATION / 20" | bc -l)
 
 for i in $(seq 0 19); do
   TIMESTAMP=$(echo "$i * $INTERVAL" | bc -l)
-  printf -v PADDED "%02d" "$i"
+  PADDED=$(printf "%02d" "$i")
   ffmpeg -ss "$TIMESTAMP" -i "$INPUT_FILE" -frames:v 1 "$OUTPUT_DIR/out_${PADDED}.png"
 done

@@ -1,5 +1,8 @@
-FROM alpine:latest
+FROM node:alpine
 RUN apk add --no-cache ffmpeg
 WORKDIR /app
+EXPOSE 3000
+EXPOSE 80
 COPY . .
-CMD ["/bin/sh"]
+RUN npm install
+CMD ["npm", "run", "start"]

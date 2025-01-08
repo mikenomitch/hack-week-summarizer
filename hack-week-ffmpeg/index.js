@@ -102,7 +102,7 @@ const start = async () => {
     console.log("Starting server...");
     await fastify.listen({
       port: PORT,
-      host: "0.0.0.0",
+      host: "::",
     });
     console.log(`Server running on port ${PORT}`);
   } catch (err) {

@@ -1,6 +1,9 @@
-[[containers.app]]
-instances = 1
-name = "hack-week-ffmpeg"
+[vars]
+PORT = 80
 
-[containers.app.configuration]
-image = "docker.io/cloudflare/hello-world:1.0"
+[cloudchamber]
+image = "docker.io/mnomitch/ffmpeg:2.3"
+location = "sea05"
+ipv4 = false
+vcpu = 4
+memory = "4GB"

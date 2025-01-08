@@ -35,34 +35,68 @@ export default {
 		}
 
 		if (request.method === 'PUT' || request.method === 'POST') {
-			const key = uuidv4() + '.jpg';
+			const pathname = new URL(request.url).pathname;
+			let params = new URL(request.url).searchParams;
 
-			let formData = await request.formData();
-			const file = formData.get('file');
-			if (file == undefined) {
-				throw new Error('No file found');
+			if (pathname === '/frames') {
+				console.log('In the frame upload, params: ', params);
+
+				const bucketPath = params.get('bucketPath');
+				if (!bucketPath) {
+					return new Response('No bucketPath provided', { status: 400 });
+				}
+
+				const basePath = params.get('basePath');
+				if (!basePath) {
+					return new Response('No basePath provided', { status: 400 });
+				}
+
+				const data = await request.arrayBuffer();
+				await env.HACK_WEEK_BUCKET.put(bucketPath, data);
+
+				const finalUpload = params.get('finalUpload');
+
+				if (finalUpload === 'true') {
+					console.log('Starting workflow!');
+					let instance = await env.ANALYZE_IMAGE.create({
+						params: { key: basePath },
+					});
+					console.log('Started analysis workflow:', instance.id);
+
+					return Response.json({
+						id: instance.id,
+						key: basePath,
+						details: await instance.status(),
+						link: `https://dash.cloudflare.com/8505f017ecf4c9b8855b331975d576fe/workers/workflows/analyze-image/instance/${instance.id}`,
+					});
+				} else {
+					console.log('Not final upload, skipping workflow - ', finalUpload);
+					return new Response('Successfully uploaded', { status: 200 });
+				}
 			}
 
-			if (typeof file === 'string') {
-				throw new Error('Incorrect file format');
+			if (pathname === '/') {
+				let formData = await request.formData();
+				const file = formData.get('file');
+				if (file == undefined) {
+					throw new Error('No file found');
+				}
+
+				if (typeof file === 'string') {
+					throw new Error('Incorrect file format');
+				}
+
+				// Set the content type based on the file
+				const responseHeaders = new Headers();
+				responseHeaders.set('Content-Type', file.type);
+				const key = uuidv4() + file.name;
+				await env.HACK_WEEK_BUCKET.put(key, file);
+
+				return Response.json({
+					key,
+					link: `https://dash.cloudflare.com/8505f017ecf4c9b8855b331975d576fe/workers/workflows/analyze-image/instance/${instance.id}`,
+				});
 			}
-
-			// Set the content type based on the file
-			const responseHeaders = new Headers();
-			responseHeaders.set('Content-Type', file.type);
-
-			await env.HACK_WEEK_BUCKET.put(key, file);
-
-			let instance = await env.ANALYZE_IMAGE.create({
-				params: { key },
-			});
-
-			return Response.json({
-				id: instance.id,
-				key,
-				details: await instance.status(),
-				link: `https://dash.cloudflare.com/8505f017ecf4c9b8855b331975d576fe/workers/workflows/analyze-image/instance/${instance.id}`,
-			});
 		}
 
 		return new Response('Method not allowed', { status: 405 });
@@ -76,9 +110,8 @@ type Params = {
 export class AnalyzeImage extends WorkflowEntrypoint<Env, Params> {
 	async run(event: WorkflowEvent<Params>, step: WorkflowStep) {
 		let imageCaption = step.do('analyze image with AI', async () => {
-			// let object = await this.env.HACK_WEEK_BUCKET.get(event.payload.key);
-
-			let listOfFiles = await this.env.HACK_WEEK_BUCKET.list({ prefix: 'vid_frames' });
+			console.log('BUCKET PREFIX TO ANALYZE: ', event.payload.key);
+			let listOfFiles = await this.env.HACK_WEEK_BUCKET.list({ prefix: event.payload.key });
 
 			// await list of promises
 			let captionPromises = listOfFiles.objects.map(async (object) => {

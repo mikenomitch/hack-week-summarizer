@@ -1,10 +1,15 @@
 import Fastify from "fastify";
+import fs from "node:fs";
+import path from "node:path";
+import { execSync } from "child_process";
+import os from "os";
+import { v4 as uuidv4 } from "uuid";
 
 const fastify = Fastify({ logger: true });
 
 // Handle POST requests
 fastify.post("/", async (request, reply) => {
-  const { url } = request.body;
+  const { url } = request.query;
 
   if (!url) {
     throw new Error("No URL provided");
@@ -17,13 +22,6 @@ fastify.post("/", async (request, reply) => {
   }
 
   const videoData = await response.arrayBuffer();
-
-  // Write video data to temp file
-  const fs = require("fs");
-  const { execSync } = require("child_process");
-  const path = require("path");
-  const os = require("os");
-
   // Create temp directory and files
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "video-"));
   const inputPath = path.join(tempDir, "input.mp4");
@@ -49,16 +47,25 @@ fastify.post("/", async (request, reply) => {
   fs.rmSync(tempDir, { recursive: true, force: true });
 
   // Upload frames to R2 bucket
-  const { destination } = request.body;
-  if (!destination) {
-    throw new Error("No destination bucket URL provided");
-  }
+  const { bucketPath } = request.query;
+  const framePath = bucketPath || uuidv4();
+  // if (!destination) {
+  //   throw new Error("No destination bucket URL provided");
+  // }
+
+  let destination =
+    "https://hack-week-ts.mike-test-ent-account.workers.dev/frames";
 
   // Upload each frame
+
   const uploadedFrames = await Promise.all(
     frames.map(async (frameData, index) => {
+      const finalUpload = index === frames.length - 1;
+
       const paddedIndex = String(index).padStart(2, "0");
-      const frameUrl = `${destination}/out_${paddedIndex}.png`;
+      const frameFileName = `out_${paddedIndex}.png`;
+      const frameKey = `${framePath}/${frameFileName}`;
+      const frameUrl = `${destination}?bucketPath=${frameKey}&finalUpload=${finalUpload}&basePath=${framePath}`;
 
       const uploadResponse = await fetch(frameUrl, {
         method: "PUT",

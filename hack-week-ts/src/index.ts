@@ -1,11 +1,70 @@
 import { v4 as uuidv4 } from 'uuid';
-import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent } from 'cloudflare:workers';
+import { WorkflowEntrypoint, WorkflowStep, WorkflowEvent, DurableObject } from 'cloudflare:workers';
 
 interface Env {
 	HACK_WEEK_BUCKET: R2Bucket;
 	AI: Ai;
 	ANALYZE_IMAGE: Workflow;
 	ASSETS: Fetcher;
+	ANALYZER_STORE: DurableObjectNamespace<AnalyzerStore>;
+}
+
+interface VideoData {
+	id: string;
+	status: string;
+	description: string;
+}
+
+interface AIResponse {
+	response?: string;
+	tool_calls?: {
+		name: string;
+		arguments: unknown;
+	}[];
+}
+
+export class AnalyzerStore extends DurableObject {
+	protected state: DurableObjectState;
+	protected env: Env;
+
+	constructor(state: DurableObjectState, env: Env) {
+		super(state, env);
+		this.state = state;
+		this.env = env;
+	}
+
+	async saveVideo(uuid: string, status: string, description: string): Promise<void> {
+		const video = {
+			id: uuid,
+			status,
+			description,
+		};
+
+		await this.state.storage.put(`video:${uuid}`, video);
+	}
+
+	async updateVideo(uuid: string, status: string, description: string): Promise<void> {
+		const video = {
+			id: uuid,
+			status,
+			description,
+		};
+
+		await this.state.storage.put(`video:${uuid}`, video);
+	}
+
+	async getVideo(uuid: string): Promise<VideoData | undefined> {
+		return await this.state.storage.get<VideoData>(`video:${uuid}`);
+	}
+
+	async getAllVideos(): Promise<any[]> {
+		const videos = [];
+		let list = await this.state.storage.list({ prefix: 'video:' });
+		for (const [key, value] of list) {
+			videos.push(value);
+		}
+		return videos;
+	}
 }
 
 export default {
@@ -13,7 +72,6 @@ export default {
 		let pathname = new URL(request.url).pathname;
 		let params = new URL(request.url).searchParams;
 
-		console.log('I AM IN A FETCH!');
 		// if method is get return some HTML
 		if (request.method === 'GET') {
 			// Add this inside the fetch handler, alongside the other pathname checks
@@ -22,46 +80,26 @@ export default {
 				if (!key) {
 					return new Response('No key provided', { status: 400 });
 				}
-				// Get all workflow instances for this key
-				try {
-					let workflowInstance = await env.ANALYZE_IMAGE.get(key);
-					let instanceStatus = await workflowInstance.status();
 
-					console.log('INSTANCE STATUS: ', instanceStatus);
+				let id = env.ANALYZER_STORE.idFromName('singleton');
+				let analyzerStore = await env.ANALYZER_STORE.get(id);
+				let video = await analyzerStore.getVideo(key);
 
-					if (instanceStatus.status === 'complete') {
-						return Response.json({
-							status: 'complete',
-							summary: instanceStatus.output,
-						});
-					} else if (instanceStatus.status === 'errored') {
-						return Response.json({
-							status: 'error',
-							error: instanceStatus.error || 'Workflow failed',
-						});
-					}
-				} catch (e) {
-					return Response.json({
-						status: 'processing',
-					});
+				if (!video) {
+					return new Response('Video not found', { status: 404 });
 				}
 
-				// Still processing
 				return Response.json({
-					status: 'processing',
+					status: video.status,
+					summary: video.description,
 				});
 			}
-			console.log('WAT');
 
 			return env.ASSETS.fetch(request);
 		}
 
 		if (request.method === 'PUT' || request.method === 'POST') {
-			console.log('I AM IN A POST!');
-
 			if (pathname === '/frames') {
-				console.log('In the frame upload, params: ', params);
-
 				let bucketPath = params.get('bucketPath');
 				if (!bucketPath) {
 					return new Response('No bucketPath provided', { status: 400 });
@@ -78,11 +116,13 @@ export default {
 				let finalUpload = params.get('finalUpload');
 
 				if (finalUpload === 'true') {
-					console.log('Starting workflow!');
+					let id = env.ANALYZER_STORE.idFromName('singleton');
+					let analyzerStore = await env.ANALYZER_STORE.get(id);
+					await analyzerStore.updateVideo(basePath, 'processing', 'Analyzing Frames using AI');
+
 					let instance = await env.ANALYZE_IMAGE.create({
 						params: { key: basePath },
 					});
-					console.log('Started analysis workflow:', instance.id);
 
 					return Response.json({
 						id: instance.id,
@@ -91,7 +131,6 @@ export default {
 						link: `https://dash.cloudflare.com/8505f017ecf4c9b8855b331975d576fe/workers/workflows/analyze-image/instance/${instance.id}`,
 					});
 				} else {
-					console.log('Not final upload, skipping workflow - ', finalUpload);
 					return new Response('Successfully uploaded', { status: 200 });
 				}
 			}
@@ -116,12 +155,15 @@ export default {
 				let bucketUrl = `https://pub-dbcf9f0bd3af47ca9d40971179ee62de.r2.dev/${key}`;
 				let postURL = `https://poller.io/?url=${bucketUrl}&bucketPath=${uuid}`;
 
+				// Create a new DO instance to track this upload
+				let id = env.ANALYZER_STORE.idFromName('singleton');
+				let analyzerStore = await env.ANALYZER_STORE.get(id);
+				await analyzerStore.saveVideo(uuid, 'processing', 'Processing video');
+
 				let ffmpegResponse = await fetch(postURL, { method: 'POST' });
 				if (!ffmpegResponse.ok) {
-					console.log('FFMPEG RESPONSE NOT GOOD');
 					throw new Error(`Failed to process video: ${ffmpegResponse.statusText}`);
 				} else {
-					console.log('FFMPEG RESPONSE ALL GOOD');
 				}
 
 				return Response.json({
@@ -144,15 +186,12 @@ type Params = {
 export class AnalyzeImage extends WorkflowEntrypoint<Env, Params> {
 	async run(event: WorkflowEvent<Params>, step: WorkflowStep) {
 		let imageCaption = step.do('analyze image with AI', async () => {
-			console.log('BUCKET PREFIX TO ANALYZE: ', event.payload.key);
 			let listOfFiles = await this.env.HACK_WEEK_BUCKET.list({ prefix: event.payload.key });
 
 			// await list of promises
 			let captionPromises = listOfFiles.objects
 				.filter((object) => object.key !== event.payload.key && object.key.includes('/'))
 				.map(async (object) => {
-					console.log('KEY: ', object.key);
-
 					let objectBody = await this.env.HACK_WEEK_BUCKET.get(object.key);
 					if (objectBody == undefined) {
 						throw new Error('Failed to fetch image');
@@ -174,8 +213,6 @@ export class AnalyzeImage extends WorkflowEntrypoint<Env, Params> {
 
 			let captions = await Promise.all(captionPromises);
 
-			console.log('ALL MY CAPTIONS: ', captions);
-
 			let messages = [
 				{
 					role: 'system',
@@ -192,15 +229,18 @@ export class AnalyzeImage extends WorkflowEntrypoint<Env, Params> {
 					content: `Here are my image captions: ${captions.join(' --- ')}`,
 				},
 			];
+			let aiResponse = await this.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { messages });
+			let res = {
+				response: (aiResponse as any).response,
+			};
 
-			let response = await this.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { messages });
+			let id = this.env.ANALYZER_STORE.idFromName('singleton');
+			let analyzerStore = await this.env.ANALYZER_STORE.get(id);
 
-			console.log('THE SUMMARY RESPONSE IS: ', JSON.stringify(response));
+			await analyzerStore.updateVideo(event.payload.key, 'done', res.response);
 
-			return JSON.stringify(response);
+			return res.response;
 		});
-
-		console.log('THE IMAGE IS: ', imageCaption);
 
 		return imageCaption;
 	}

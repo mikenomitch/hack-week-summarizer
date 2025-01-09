@@ -36,7 +36,7 @@ document.addEventListener('alpine:init', () => {
 
 					const data = await response.json();
 
-					if (data.status === 'complete') {
+					if (data.status === 'done') {
 						this.summary = data.summary;
 						this.polling = false;
 						this.loading = false;

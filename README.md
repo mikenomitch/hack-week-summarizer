@@ -6,21 +6,14 @@ I should be able to upload a video and get a summary of that video generated wit
 
 ## Steps
 
-* Frontend with very simple upload field
-* Uploaded file is part of Workflow
-  * Upload file
-  * On done, send URL to FFMPEG
-  * FFMPEG
-    * chops up into many frames, uploads each
-    * FFMPEG grabs the audio and uploads it too
-    * Sends a signal when it is done back to the Worker with its ID
-  * When those are completely done
-    * Workers AI is sent each frame - returns a description
-    * Workers AI is sent the audio - returns the text
-    * Workers AI is sent something that summarizes the whole video
-  * Returns a description of the video
+* Expose summary
+  * Create the workflow first
+  * Pass the instance ID to the frontend initially
+  * Use this instead of the basePath for getting the correct Workflow ID later
 
-
-  * Worker takes uploaded files and sticks it in R2
-  * When the R2 upload is done, it kicks off a Workflow to handle it
-    * Upload
+* Audio
+  * FFMPEG grabs audio (do this locally!)
+  * Audio gets uploaded to its own spot in the bucket
+  * Audio is filtered out of the image list
+  * Audio is sent to the AI
+  * Summary incorporates the audio

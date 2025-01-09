@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { execSync } from "child_process";
 import os from "os";
-import { v4 as uuidv4 } from "uuid";
 
 const fastify = Fastify({ logger: true });
 
@@ -26,12 +25,14 @@ fastify.post("/", async (request, reply) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "video-"));
   const inputPath = path.join(tempDir, "input.mp4");
   const outputDir = path.join(tempDir, "frames");
+  const audioOutputDir = path.join(tempDir, "audio");
 
   // Write video data to temp file
   fs.writeFileSync(inputPath, Buffer.from(videoData));
 
   // Run frame-it script
   execSync(`./frame-it.sh "${inputPath}" "${outputDir}"`);
+  execSync(`./grab-audio.sh "${inputPath}" "${audioOutputDir}"`);
 
   // Read generated frames
   const frames = fs
@@ -43,18 +44,44 @@ fastify.post("/", async (request, reply) => {
       return frameData;
     });
 
+  // Read generated audio
+  const audioData = fs
+    .readdirSync(outputDir)
+    .filter((f) => f.endsWith(".mp3"))
+    .map((f) => {
+      const framePath = path.join(outputDir, f);
+      const frameData = fs.readFileSync(framePath);
+      return frameData;
+    })[0];
+
   // Cleanup temp files
   fs.rmSync(tempDir, { recursive: true, force: true });
 
   // Upload frames to R2 bucket
   const { bucketPath } = request.query;
-  const framePath = bucketPath || uuidv4();
   // if (!destination) {
   //   throw new Error("No destination bucket URL provided");
   // }
 
   let destination =
     "https://hack-week-ts.mike-test-ent-account.workers.dev/frames";
+
+  const audioKey = `${bucketPath}/audio.mp3`;
+  const audioURL = `${destination}?bucketPath=${audioKey}&finalUpload=false&basePath=${bucketPath}`;
+
+  const uploadResponse = await fetch(audioURL, {
+    method: "PUT",
+    body: audioData,
+    headers: {
+      "Content-Type": "audio/mpeg",
+    },
+  });
+
+  if (!uploadResponse.ok) {
+    throw new Error(
+      `Failed to upload audio ${index}: ${uploadResponse.statusText}`
+    );
+  }
 
   // Upload each frame
 
@@ -64,8 +91,8 @@ fastify.post("/", async (request, reply) => {
 
       const paddedIndex = String(index).padStart(2, "0");
       const frameFileName = `out_${paddedIndex}.png`;
-      const frameKey = `${framePath}/${frameFileName}`;
-      const frameUrl = `${destination}?bucketPath=${frameKey}&finalUpload=${finalUpload}&basePath=${framePath}`;
+      const frameKey = `${bucketPath}/${frameFileName}`;
+      const frameUrl = `${destination}?bucketPath=${frameKey}&finalUpload=${finalUpload}&basePath=${bucketPath}`;
 
       const uploadResponse = await fetch(frameUrl, {
         method: "PUT",

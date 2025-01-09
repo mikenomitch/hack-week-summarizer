@@ -101,6 +101,7 @@ export default {
 		if (request.method === 'PUT' || request.method === 'POST') {
 			if (pathname === '/frames') {
 				let bucketPath = params.get('bucketPath');
+				console.log('bucketPath:', bucketPath);
 				if (!bucketPath) {
 					return new Response('No bucketPath provided', { status: 400 });
 				}
@@ -190,7 +191,7 @@ export class AnalyzeImage extends WorkflowEntrypoint<Env, Params> {
 
 			// await list of promises
 			let captionPromises = listOfFiles.objects
-				.filter((object) => object.key !== event.payload.key && object.key.includes('/'))
+				.filter((object) => object.key !== event.payload.key && object.key.includes('/') && object.key.includes('.png'))
 				.map(async (object) => {
 					let objectBody = await this.env.HACK_WEEK_BUCKET.get(object.key);
 					if (objectBody == undefined) {
@@ -213,6 +214,43 @@ export class AnalyzeImage extends WorkflowEntrypoint<Env, Params> {
 
 			let captions = await Promise.all(captionPromises);
 
+			let content = `Here are my image captions: ${captions.join(' --- ')}`;
+
+			let audioObject = listOfFiles.objects.find((object) => object.key !== event.payload.key && object.key.includes('.mp3'));
+			if (audioObject == undefined) {
+				console.log('NO AUDIO FOUND!');
+			} else {
+				console.log('AUDIO OBJECT', audioObject);
+				console.log('THE KEY', audioObject.key);
+
+				let audio = await this.env.HACK_WEEK_BUCKET.get(audioObject.key);
+				if (audio != undefined) {
+					console.log('HEY!');
+					let asArrayBuf = await audio.arrayBuffer();
+					if (asArrayBuf == undefined) {
+						throw new Error('Failed to parse audio - bad upload');
+					}
+
+					console.log('HO!');
+
+					const input = {
+						audio: [...new Uint8Array(asArrayBuf)],
+					};
+
+					console.log('ABOUT TO CALL!');
+					// @ts-ignore
+					const audioResponse: any = await this.env.AI.run('@cf/openai/whisper', input);
+					console.log('SUCCESS!');
+					console.log('audioResponse', audioResponse);
+
+					content += `\n\nHere is the audio transcription: ${audioResponse.text}`;
+				} else {
+					console.log('NO AUDIO RESPONSE');
+				}
+			}
+
+			console.log('CONTENT:', content);
+
 			let messages = [
 				{
 					role: 'system',
@@ -226,7 +264,7 @@ export class AnalyzeImage extends WorkflowEntrypoint<Env, Params> {
 				},
 				{
 					role: 'user',
-					content: `Here are my image captions: ${captions.join(' --- ')}`,
+					content,
 				},
 			];
 			let aiResponse = await this.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { messages });

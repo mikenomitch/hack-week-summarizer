@@ -5,56 +5,77 @@ interface Env {
 	HACK_WEEK_BUCKET: R2Bucket;
 	AI: Ai;
 	ANALYZE_IMAGE: Workflow;
+	ASSETS: Fetcher;
 }
 
 export default {
 	async fetch(request, env): Promise<Response> {
+		let pathname = new URL(request.url).pathname;
+		let params = new URL(request.url).searchParams;
+
+		console.log('I AM IN A FETCH!');
 		// if method is get return some HTML
 		if (request.method === 'GET') {
-			return new Response(
-				`
-    <html>
-        <head>
-            <title>Some HTML in here</title>
-        </head>
-        <body>
-            <h1>Summarize a video:</h1>
-            <form action="/" enctype="multipart/form-data" method="post">
-                <input name="file" type="file" accept="video/*">
-                <input type="submit">
-            </form>
-        </body>
-    </html>
-		`,
-				{
-					headers: {
-						'Content-Type': 'text/html',
-					},
+			// Add this inside the fetch handler, alongside the other pathname checks
+			if (pathname === '/status') {
+				let key = params.get('key');
+				if (!key) {
+					return new Response('No key provided', { status: 400 });
 				}
-			);
+				// Get all workflow instances for this key
+				try {
+					let workflowInstance = await env.ANALYZE_IMAGE.get(key);
+					let instanceStatus = await workflowInstance.status();
+
+					console.log('INSTANCE STATUS: ', instanceStatus);
+
+					if (instanceStatus.status === 'complete') {
+						return Response.json({
+							status: 'complete',
+							summary: instanceStatus.output,
+						});
+					} else if (instanceStatus.status === 'errored') {
+						return Response.json({
+							status: 'error',
+							error: instanceStatus.error || 'Workflow failed',
+						});
+					}
+				} catch (e) {
+					return Response.json({
+						status: 'processing',
+					});
+				}
+
+				// Still processing
+				return Response.json({
+					status: 'processing',
+				});
+			}
+			console.log('WAT');
+
+			return env.ASSETS.fetch(request);
 		}
 
 		if (request.method === 'PUT' || request.method === 'POST') {
-			const pathname = new URL(request.url).pathname;
-			let params = new URL(request.url).searchParams;
+			console.log('I AM IN A POST!');
 
 			if (pathname === '/frames') {
 				console.log('In the frame upload, params: ', params);
 
-				const bucketPath = params.get('bucketPath');
+				let bucketPath = params.get('bucketPath');
 				if (!bucketPath) {
 					return new Response('No bucketPath provided', { status: 400 });
 				}
 
-				const basePath = params.get('basePath');
+				let basePath = params.get('basePath');
 				if (!basePath) {
 					return new Response('No basePath provided', { status: 400 });
 				}
 
-				const data = await request.arrayBuffer();
+				let data = await request.arrayBuffer();
 				await env.HACK_WEEK_BUCKET.put(bucketPath, data);
 
-				const finalUpload = params.get('finalUpload');
+				let finalUpload = params.get('finalUpload');
 
 				if (finalUpload === 'true') {
 					console.log('Starting workflow!');
@@ -77,7 +98,7 @@ export default {
 
 			if (pathname === '/') {
 				let formData = await request.formData();
-				const file = formData.get('file');
+				let file = formData.get('file');
 				if (file == undefined) {
 					throw new Error('No file found');
 				}
@@ -87,7 +108,7 @@ export default {
 				}
 
 				// Set the content type based on the file
-				const responseHeaders = new Headers();
+				let responseHeaders = new Headers();
 				responseHeaders.set('Content-Type', file.type);
 				let uuid = uuidv4();
 				let key = uuid + file.name;
@@ -95,7 +116,7 @@ export default {
 				let bucketUrl = `https://pub-dbcf9f0bd3af47ca9d40971179ee62de.r2.dev/${key}`;
 				let postURL = `https://poller.io/?url=${bucketUrl}&bucketPath=${uuid}`;
 
-				const ffmpegResponse = await fetch(postURL, { method: 'POST' });
+				let ffmpegResponse = await fetch(postURL, { method: 'POST' });
 				if (!ffmpegResponse.ok) {
 					console.log('FFMPEG RESPONSE NOT GOOD');
 					throw new Error(`Failed to process video: ${ffmpegResponse.statusText}`);
@@ -107,6 +128,7 @@ export default {
 					key,
 					bucketUrl,
 					postURL,
+					basePath: uuid,
 				});
 			}
 		}
@@ -154,7 +176,7 @@ export class AnalyzeImage extends WorkflowEntrypoint<Env, Params> {
 
 			console.log('ALL MY CAPTIONS: ', captions);
 
-			const messages = [
+			let messages = [
 				{
 					role: 'system',
 					content: `
@@ -171,7 +193,7 @@ export class AnalyzeImage extends WorkflowEntrypoint<Env, Params> {
 				},
 			];
 
-			const response = await this.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { messages });
+			let response = await this.env.AI.run('@cf/meta/llama-3.3-70b-instruct-fp8-fast', { messages });
 
 			console.log('THE SUMMARY RESPONSE IS: ', JSON.stringify(response));
 
